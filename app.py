@@ -1,130 +1,176 @@
-# app.py - WhatsApp Inventory Bot with Extensive Debugging
+# group_admin_bot.py - Alternative Group Management Solution
 import os
 import json
 import requests
 from flask import Flask, request, jsonify
 from datetime import datetime
-import re
-from dotenv import load_dotenv
-import logging
-
-# Load environment variables
-load_dotenv()
-
-# Configure logging
-logging.basicConfig(level=logging.DEBUG)
-logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
 
-# Environment variables
-WHATSAPP_TOKEN = os.getenv('WHATSAPP_TOKEN')
-WHATSAPP_PHONE_NUMBER_ID = os.getenv('WHATSAPP_PHONE_NUMBER_ID')
-VERIFY_TOKEN = os.getenv('VERIFY_TOKEN')
+# Group admin configuration
+GROUP_ADMINS = {
+    "9779816034951": "Admin User 1",  # Your number
+    # Add more admin numbers here
+}
 
-# Debug: Print environment variables (masked)
-print("=== ENVIRONMENT VARIABLES DEBUG ===")
-print(f"WHATSAPP_TOKEN: {'SET' if WHATSAPP_TOKEN else 'NOT SET'}")
-print(f"WHATSAPP_PHONE_NUMBER_ID: {'SET' if WHATSAPP_PHONE_NUMBER_ID else 'NOT SET'}")
-print(f"VERIFY_TOKEN: {'SET' if VERIFY_TOKEN else 'NOT SET'}")
-if WHATSAPP_TOKEN:
-    print(f"Token preview: {WHATSAPP_TOKEN[:10]}...{WHATSAPP_TOKEN[-10:]}")
-if WHATSAPP_PHONE_NUMBER_ID:
-    print(f"Phone Number ID: {WHATSAPP_PHONE_NUMBER_ID}")
-print("=====================================")
+# Store group member numbers
+GROUP_MEMBERS = set()
 
-# Simple inventory storage
+# Enhanced inventory with group features
 inventory = {}
+inventory_updates = []  # Store update history
+
+def is_group_admin(phone_number):
+    """Check if user is group admin"""
+    return phone_number in GROUP_ADMINS
 
 def send_whatsapp_message(to_number, message):
-    """Send WhatsApp message with detailed debugging"""
-    
-    print(f"\n=== ATTEMPTING TO SEND MESSAGE ===")
-    print(f"To: {to_number}")
-    print(f"Message: {message}")
-    print(f"Using Phone Number ID: {WHATSAPP_PHONE_NUMBER_ID}")
-    print(f"Using Token: {WHATSAPP_TOKEN[:10]}...{WHATSAPP_TOKEN[-10:] if WHATSAPP_TOKEN else 'None'}")
-    
-    url = f"https://graph.facebook.com/v18.0/{WHATSAPP_PHONE_NUMBER_ID}/messages"
-    
-    headers = {
-        'Authorization': f'Bearer {WHATSAPP_TOKEN}',
-        'Content-Type': 'application/json',
-    }
-    
-    data = {
-        "messaging_product": "whatsapp",
-        "to": to_number,
-        "type": "text",
-        "text": {
-            "body": message
-        }
-    }
-    
-    print(f"URL: {url}")
-    print(f"Headers: {headers}")
-    print(f"Data: {json.dumps(data, indent=2)}")
-    
-    try:
-        response = requests.post(url, headers=headers, json=data)
-        print(f"Response Status: {response.status_code}")
-        print(f"Response Text: {response.text}")
-        
-        if response.status_code == 200:
-            print("✅ MESSAGE SENT SUCCESSFULLY!")
-            return True
-        else:
-            print(f"❌ MESSAGE FAILED!")
-            print(f"Error: {response.text}")
-            return False
-            
-    except Exception as e:
-        print(f"❌ EXCEPTION OCCURRED: {str(e)}")
-        return False
+    """Send WhatsApp message"""
+    # Your existing send_whatsapp_message function
+    pass
 
-def process_inventory_command(message_text, sender_number):
-    """Process inventory commands with debugging"""
-    
-    print(f"\n=== PROCESSING COMMAND ===")
-    print(f"From: {sender_number}")
-    print(f"Message: {message_text}")
+def broadcast_to_group(message, exclude_number=None):
+    """Send message to all group members"""
+    sent_count = 0
+    for member in GROUP_MEMBERS:
+        if member != exclude_number:
+            if send_whatsapp_message(member, message):
+                sent_count += 1
+    return sent_count
+
+def process_group_inventory_command(message_text, sender_number):
+    """Process inventory commands with group features"""
     
     message_text = message_text.lower().strip()
+    sender_name = GROUP_ADMINS.get(sender_number, f"User {sender_number[-4:]}")
     
+    # Join group command
+    if message_text == "join":
+        if sender_number not in GROUP_MEMBERS:
+            GROUP_MEMBERS.add(sender_number)
+            response = f"✅ {sender_name} joined the inventory group!\n"
+            response += f"👥 Total members: {len(GROUP_MEMBERS)}\n"
+            response += "Type 'help' for commands."
+            
+            # Notify other members
+            broadcast_message = f"👋 {sender_name} joined the inventory group!"
+            broadcast_to_group(broadcast_message, exclude_number=sender_number)
+            
+            return response
+        else:
+            return "✅ You're already in the group!"
+    
+    # Leave group command
+    elif message_text == "leave":
+        if sender_number in GROUP_MEMBERS:
+            GROUP_MEMBERS.remove(sender_number)
+            broadcast_message = f"👋 {sender_name} left the inventory group"
+            broadcast_to_group(broadcast_message, exclude_number=sender_number)
+            return "✅ You left the inventory group"
+        else:
+            return "❌ You're not in the group"
+    
+    # Check if user is in group
+    if sender_number not in GROUP_MEMBERS:
+        return "❌ You must join the group first. Send 'join' to participate."
+    
+    # Group help command
     if message_text == "help":
-        response = """🤖 WhatsApp Inventory Bot Commands:
+        response = """🤖 *WhatsApp Group Inventory Bot*
 
-📦 *Initialize inventory:*
-apple=5, banana=12, table=10
+👥 *Group Commands:*
+• join - Join the inventory group
+• leave - Leave the group
+• members - Show group members
+• broadcast <message> - Send to all members (admin only)
 
-➕ *Add items:*
-add apple=3
+📦 *Inventory Commands:*
+• inventory - Show current stock
+• add apple=5 - Add items to stock
+• sell banana=3 - Remove items from stock
+• history - Show recent updates
+• apple=10, banana=5 - Initialize inventory
 
-➖ *Sell items:*
-sell banana=5
+🔧 *Admin Commands:*
+• reset - Clear all inventory (admin only)
+• kick <number> - Remove member (admin only)
 
-📋 *Show inventory:*
-inventory
-
-❓ *Get help:*
-help
-
-Example: apple=10, banana=5"""
+💡 *Examples:*
+• apple=10, banana=5, orange=8
+• add apple=5
+• sell banana=3"""
         return response
     
+    # Show group members
+    elif message_text == "members":
+        if not GROUP_MEMBERS:
+            return "👥 No members in the group"
+        
+        response = f"👥 *Group Members ({len(GROUP_MEMBERS)}):*\n"
+        for i, member in enumerate(GROUP_MEMBERS, 1):
+            member_name = GROUP_ADMINS.get(member, f"User {member[-4:]}")
+            admin_badge = " 👑" if is_group_admin(member) else ""
+            response += f"{i}. {member_name}{admin_badge}\n"
+        return response
+    
+    # Broadcast message (admin only)
+    elif message_text.startswith("broadcast "):
+        if not is_group_admin(sender_number):
+            return "❌ Only admins can broadcast messages"
+        
+        broadcast_msg = message_text[10:].strip()
+        if not broadcast_msg:
+            return "❌ Usage: broadcast <your message>"
+        
+        full_message = f"📢 *Broadcast from {sender_name}:*\n{broadcast_msg}"
+        sent_count = broadcast_to_group(full_message, exclude_number=sender_number)
+        
+        return f"✅ Message sent to {sent_count} members"
+    
+    # Reset inventory (admin only)
+    elif message_text == "reset":
+        if not is_group_admin(sender_number):
+            return "❌ Only admins can reset inventory"
+        
+        inventory.clear()
+        inventory_updates.clear()
+        
+        # Notify group
+        broadcast_message = f"🔄 {sender_name} reset the inventory"
+        broadcast_to_group(broadcast_message, exclude_number=sender_number)
+        
+        return "✅ Inventory reset successfully"
+    
+    # Show inventory
     elif message_text == "inventory":
         if not inventory:
-            return "📦 Inventory is empty. Initialize with: apple=5, banana=10"
+            return "📦 Inventory is empty"
         
         response = "📦 *Current Inventory:*\n"
+        total_items = 0
         for item, quantity in inventory.items():
             response += f"• {item}: {quantity}\n"
+            total_items += quantity
+        
+        response += f"\n📊 Total items: {total_items}"
         return response
     
+    # Show update history
+    elif message_text == "history":
+        if not inventory_updates:
+            return "📋 No inventory updates yet"
+        
+        response = "📋 *Recent Updates:*\n"
+        # Show last 5 updates
+        for update in inventory_updates[-5:]:
+            response += f"• {update}\n"
+        
+        return response
+    
+    # Add items
     elif message_text.startswith("add "):
-        # Parse add command
         try:
-            item_data = message_text[4:].strip()  # Remove "add "
+            item_data = message_text[4:].strip()
             if "=" in item_data:
                 item, quantity = item_data.split("=", 1)
                 item = item.strip()
@@ -135,16 +181,27 @@ Example: apple=10, banana=5"""
                 else:
                     inventory[item] = quantity
                 
-                return f"✅ Added {quantity} {item}(s). New quantity: {inventory[item]}"
+                # Log update
+                update_log = f"{sender_name} added {quantity} {item}(s) at {datetime.now().strftime('%H:%M')}"
+                inventory_updates.append(update_log)
+                
+                response = f"✅ Added {quantity} {item}(s)\n"
+                response += f"📦 New quantity: {inventory[item]}"
+                
+                # Notify group
+                broadcast_message = f"➕ {sender_name} added {quantity} {item}(s) to inventory"
+                broadcast_to_group(broadcast_message, exclude_number=sender_number)
+                
+                return response
             else:
                 return "❌ Format: add apple=5"
         except ValueError:
             return "❌ Invalid quantity. Use numbers only."
     
+    # Sell items
     elif message_text.startswith("sell "):
-        # Parse sell command
         try:
-            item_data = message_text[5:].strip()  # Remove "sell "
+            item_data = message_text[5:].strip()
             if "=" in item_data:
                 item, quantity = item_data.split("=", 1)
                 item = item.strip()
@@ -160,108 +217,78 @@ Example: apple=10, banana=5"""
                 if inventory[item] == 0:
                     del inventory[item]
                 
-                return f"✅ Sold {quantity} {item}(s). Remaining: {inventory.get(item, 0)}"
+                # Log update
+                update_log = f"{sender_name} sold {quantity} {item}(s) at {datetime.now().strftime('%H:%M')}"
+                inventory_updates.append(update_log)
+                
+                response = f"✅ Sold {quantity} {item}(s)\n"
+                response += f"📦 Remaining: {inventory.get(item, 0)}"
+                
+                # Notify group
+                broadcast_message = f"➖ {sender_name} sold {quantity} {item}(s) from inventory"
+                broadcast_to_group(broadcast_message, exclude_number=sender_number)
+                
+                return response
             else:
                 return "❌ Format: sell apple=3"
         except ValueError:
             return "❌ Invalid quantity. Use numbers only."
     
+    # Initialize inventory
     elif "=" in message_text:
-        # Initialize inventory
         try:
             items = message_text.split(",")
+            updated_items = []
+            
             for item in items:
                 if "=" in item:
                     name, quantity = item.split("=", 1)
                     name = name.strip()
                     quantity = int(quantity.strip())
                     inventory[name] = quantity
+                    updated_items.append(f"{name}: {quantity}")
             
-            response = "✅ Inventory initialized:\n"
-            for item, quantity in inventory.items():
-                response += f"• {item}: {quantity}\n"
-            return response
+            if updated_items:
+                # Log update
+                update_log = f"{sender_name} updated inventory at {datetime.now().strftime('%H:%M')}"
+                inventory_updates.append(update_log)
+                
+                response = "✅ Inventory updated:\n"
+                for item in updated_items:
+                    response += f"• {item}\n"
+                
+                # Notify group
+                broadcast_message = f"🔄 {sender_name} updated the inventory"
+                broadcast_to_group(broadcast_message, exclude_number=sender_number)
+                
+                return response
+            else:
+                return "❌ Invalid format. Use: apple=5, banana=10"
         except ValueError:
             return "❌ Invalid format. Use: apple=5, banana=10"
     
     else:
-        return "❌ Unknown command. Type 'help' for commands."
-
-@app.route('/')
-def home():
-    return "🤖 WhatsApp Inventory Bot is Running!"
-
-@app.route('/health')
-def health():
-    return jsonify({
-        "status": "healthy",
-        "timestamp": datetime.now().isoformat(),
-        "environment": {
-            "whatsapp_token": "SET" if WHATSAPP_TOKEN else "NOT SET",
-            "phone_number_id": "SET" if WHATSAPP_PHONE_NUMBER_ID else "NOT SET",
-            "verify_token": "SET" if VERIFY_TOKEN else "NOT SET"
-        }
-    })
-
-@app.route('/debug')
-def debug():
-    """Debug endpoint to check configuration"""
-    return jsonify({
-        "whatsapp_token": WHATSAPP_TOKEN[:10] + "..." + WHATSAPP_TOKEN[-10:] if WHATSAPP_TOKEN else "NOT SET",
-        "phone_number_id": WHATSAPP_PHONE_NUMBER_ID,
-        "verify_token": VERIFY_TOKEN,
-        "inventory": inventory
-    })
-
-@app.route('/test-send')
-def test_send():
-    """Test endpoint to send a message manually"""
-    test_number = request.args.get('number')
-    if not test_number:
-        return "Usage: /test-send?number=1234567890"
-    
-    success = send_whatsapp_message(test_number, "🤖 Test message from WhatsApp Bot!")
-    return f"Message sent: {success}"
+        return "❌ Unknown command. Type 'help' for available commands."
 
 @app.route('/webhook', methods=['GET', 'POST'])
 def webhook():
-    """WhatsApp webhook endpoint with extensive debugging"""
-    
-    print(f"\n=== WEBHOOK CALLED ===")
-    print(f"Method: {request.method}")
-    print(f"Headers: {dict(request.headers)}")
-    print(f"Args: {dict(request.args)}")
+    """Enhanced webhook with group features"""
     
     if request.method == 'GET':
-        # Webhook verification
+        # Webhook verification (same as before)
         mode = request.args.get('hub.mode')
         token = request.args.get('hub.verify_token')
         challenge = request.args.get('hub.challenge')
         
-        print(f"Verification attempt:")
-        print(f"Mode: {mode}")
-        print(f"Token received: {token}")
-        print(f"Token expected: {VERIFY_TOKEN}")
-        print(f"Challenge: {challenge}")
-        
-        if mode == 'subscribe' and token == VERIFY_TOKEN:
-            print("✅ Webhook verified successfully!")
+        if mode == 'subscribe' and token == os.getenv('VERIFY_TOKEN'):
             return challenge
         else:
-            print("❌ Webhook verification failed!")
             return "Verification failed", 403
     
     elif request.method == 'POST':
-        # Handle incoming messages
         try:
             data = request.get_json()
-            print(f"Received data: {json.dumps(data, indent=2)}")
             
-            if not data:
-                print("❌ No data received")
-                return "No data", 400
-            
-            # Check if it's a message
             if 'entry' in data:
                 for entry in data['entry']:
                     if 'changes' in entry:
@@ -271,27 +298,17 @@ def webhook():
                                     sender_number = message['from']
                                     message_text = message.get('text', {}).get('body', '')
                                     
-                                    print(f"Processing message from {sender_number}: {message_text}")
-                                    
-                                    # Process the command
-                                    response = process_inventory_command(message_text, sender_number)
+                                    # Process with group features
+                                    response = process_group_inventory_command(message_text, sender_number)
                                     
                                     # Send response
-                                    print(f"Sending response: {response}")
-                                    success = send_whatsapp_message(sender_number, response)
-                                    
-                                    if success:
-                                        print("✅ Response sent successfully")
-                                    else:
-                                        print("❌ Failed to send response")
+                                    send_whatsapp_message(sender_number, response)
             
             return "OK", 200
             
         except Exception as e:
-            print(f"❌ Error processing webhook: {str(e)}")
+            print(f"Error: {str(e)}")
             return f"Error: {str(e)}", 500
-    
-    return "Method not allowed", 405
 
 if __name__ == '__main__':
     port = int(os.getenv('PORT', 5000))
