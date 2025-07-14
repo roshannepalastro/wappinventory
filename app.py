@@ -31,11 +31,23 @@ def send_whatsapp_message(to_number, message):
         access_token = os.getenv('WHATSAPP_ACCESS_TOKEN')
         phone_number_id = os.getenv('WHATSAPP_PHONE_NUMBER_ID')
         
-        if not access_token or not phone_number_id:
-            print("❌ WhatsApp API credentials not configured!")
+        print(f"🔍 Checking WhatsApp API credentials:")
+        print(f"  Access token set: {access_token is not None}")
+        print(f"  Phone number ID set: {phone_number_id is not None}")
+        
+        if not access_token:
+            print("❌ WHATSAPP_ACCESS_TOKEN environment variable not set!")
+            return False
+            
+        if not phone_number_id:
+            print("❌ WHATSAPP_PHONE_NUMBER_ID environment variable not set!")
             return False
         
+        print(f"  Access token length: {len(access_token)}")
+        print(f"  Phone number ID: {phone_number_id}")
+        
         url = f"https://graph.facebook.com/v17.0/{phone_number_id}/messages"
+        print(f"  API URL: {url}")
         
         headers = {
             'Authorization': f'Bearer {access_token}',
@@ -51,18 +63,25 @@ def send_whatsapp_message(to_number, message):
             }
         }
         
+        print(f"  Sending to: {to_number}")
+        print(f"  Message length: {len(message)}")
+        
         response = requests.post(url, headers=headers, json=payload)
+        
+        print(f"  Response status: {response.status_code}")
+        print(f"  Response body: {response.text}")
         
         if response.status_code == 200:
             print(f"✅ Message sent successfully to {to_number}")
             return True
         else:
             print(f"❌ Failed to send message to {to_number}: {response.status_code}")
-            print(f"Response: {response.text}")
             return False
             
     except Exception as e:
         print(f"❌ Error sending message: {str(e)}")
+        import traceback
+        traceback.print_exc()
         return False
 
 def broadcast_to_group(message, exclude_number=None):
@@ -365,6 +384,27 @@ def home():
     </body>
     </html>
     """
+
+# Add a debug endpoint to check WhatsApp API credentials
+@app.route('/debug-whatsapp')
+def debug_whatsapp():
+    """Debug endpoint to check WhatsApp API configuration"""
+    access_token = os.getenv('WHATSAPP_ACCESS_TOKEN')
+    phone_number_id = os.getenv('WHATSAPP_PHONE_NUMBER_ID')
+    
+    return jsonify({
+        "access_token_set": access_token is not None,
+        "access_token_length": len(access_token) if access_token else 0,
+        "access_token_preview": access_token[:10] + "..." if access_token and len(access_token) > 10 else access_token,
+        "phone_number_id_set": phone_number_id is not None,
+        "phone_number_id_length": len(phone_number_id) if phone_number_id else 0,
+        "phone_number_id_preview": phone_number_id[:5] + "..." if phone_number_id and len(phone_number_id) > 5 else phone_number_id,
+        "all_env_vars": {k: "SET" if v else "NOT SET" for k, v in {
+            "WHATSAPP_ACCESS_TOKEN": access_token,
+            "WHATSAPP_PHONE_NUMBER_ID": phone_number_id,
+            "VERIFY_TOKEN": os.getenv('VERIFY_TOKEN')
+        }.items()}
+    })
 
 # Add a test endpoint to check environment variables
 @app.route('/test')
