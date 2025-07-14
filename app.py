@@ -25,9 +25,45 @@ def is_group_admin(phone_number):
     return phone_number in GROUP_ADMINS
 
 def send_whatsapp_message(to_number, message):
-    """Send WhatsApp message"""
-    # Your existing send_whatsapp_message function
-    pass
+    """Send WhatsApp message using Graph API"""
+    try:
+        # WhatsApp Business API credentials
+        access_token = os.getenv('WHATSAPP_ACCESS_TOKEN')
+        phone_number_id = os.getenv('WHATSAPP_PHONE_NUMBER_ID')
+        
+        if not access_token or not phone_number_id:
+            print("❌ WhatsApp API credentials not configured!")
+            return False
+        
+        url = f"https://graph.facebook.com/v17.0/{phone_number_id}/messages"
+        
+        headers = {
+            'Authorization': f'Bearer {access_token}',
+            'Content-Type': 'application/json'
+        }
+        
+        payload = {
+            "messaging_product": "whatsapp",
+            "to": to_number,
+            "type": "text",
+            "text": {
+                "body": message
+            }
+        }
+        
+        response = requests.post(url, headers=headers, json=payload)
+        
+        if response.status_code == 200:
+            print(f"✅ Message sent successfully to {to_number}")
+            return True
+        else:
+            print(f"❌ Failed to send message to {to_number}: {response.status_code}")
+            print(f"Response: {response.text}")
+            return False
+            
+    except Exception as e:
+        print(f"❌ Error sending message: {str(e)}")
+        return False
 
 def broadcast_to_group(message, exclude_number=None):
     """Send message to all group members"""
@@ -389,6 +425,7 @@ def webhook():
     elif request.method == 'POST':
         try:
             data = request.get_json()
+            print(f"📨 Received webhook data: {json.dumps(data, indent=2)}")
             
             if 'entry' in data:
                 for entry in data['entry']:
@@ -399,16 +436,23 @@ def webhook():
                                     sender_number = message['from']
                                     message_text = message.get('text', {}).get('body', '')
                                     
+                                    print(f"📱 Processing message from {sender_number}: '{message_text}'")
+                                    
                                     # Process with group features
                                     response = process_group_inventory_command(message_text, sender_number)
+                                    print(f"🤖 Bot response: {response}")
                                     
                                     # Send response
-                                    send_whatsapp_message(sender_number, response)
+                                    if send_whatsapp_message(sender_number, response):
+                                        print(f"✅ Response sent successfully")
+                                    else:
+                                        print(f"❌ Failed to send response")
             
             return "OK", 200
             
         except Exception as e:
-            print(f"Error: {str(e)}")
+            print(f"❌ Webhook error: {str(e)}")
+            print(f"📄 Request data: {request.get_data()}")
             return f"Error: {str(e)}", 500
 
 if __name__ == '__main__':
