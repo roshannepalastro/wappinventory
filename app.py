@@ -1,4 +1,3 @@
-
 # group_admin_bot.py - Alternative Group Management Solution
 import os
 import json
