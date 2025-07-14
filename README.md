@@ -1,0 +1,2 @@
+# wappinventory
+for deploying bot
