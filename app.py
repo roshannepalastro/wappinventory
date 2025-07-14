@@ -270,12 +270,83 @@ def process_group_inventory_command(message_text, sender_number):
     else:
         return "❌ Unknown command. Type 'help' for available commands."
 
+# Add root route to handle home page
+@app.route('/')
+def home():
+    """Landing page for the inventory bot"""
+    return """
+    <html>
+    <head>
+        <title>WhatsApp Inventory Bot</title>
+        <style>
+            body { font-family: Arial, sans-serif; max-width: 600px; margin: 50px auto; padding: 20px; }
+            h1 { color: #25d366; }
+            .status { background: #e8f5e8; padding: 10px; border-radius: 5px; margin: 20px 0; }
+            .command { background: #f0f0f0; padding: 5px; margin: 5px 0; font-family: monospace; }
+        </style>
+    </head>
+    <body>
+        <h1>🤖 WhatsApp Inventory Bot</h1>
+        
+        <div class="status">
+            <strong>✅ Bot Status:</strong> Online and Ready
+        </div>
+        
+        <h2>📱 How to Use:</h2>
+        <p>Send these commands to your WhatsApp bot:</p>
+        
+        <h3>👥 Group Commands:</h3>
+        <div class="command">join</div>
+        <div class="command">leave</div>
+        <div class="command">members</div>
+        <div class="command">broadcast &lt;message&gt;</div>
+        
+        <h3>📦 Inventory Commands:</h3>
+        <div class="command">inventory</div>
+        <div class="command">add apple=5</div>
+        <div class="command">sell banana=3</div>
+        <div class="command">history</div>
+        <div class="command">apple=10, banana=5</div>
+        
+        <h3>🔧 Admin Commands:</h3>
+        <div class="command">reset</div>
+        <div class="command">help</div>
+        
+        <h2>📊 Current Status:</h2>
+        <p><strong>Group Members:</strong> {}</p>
+        <p><strong>Inventory Items:</strong> {}</p>
+        <p><strong>Recent Updates:</strong> {}</p>
+        
+        <div class="status">
+            <strong>🔗 Webhook URL:</strong> {}/webhook
+        </div>
+    </body>
+    </html>
+    """.format(
+        len(GROUP_MEMBERS),
+        len(inventory),
+        len(inventory_updates),
+        request.host_url
+    )
+
+# Add a health check endpoint
+@app.route('/health')
+def health_check():
+    """Health check endpoint"""
+    return jsonify({
+        "status": "healthy",
+        "timestamp": datetime.now().isoformat(),
+        "group_members": len(GROUP_MEMBERS),
+        "inventory_items": len(inventory),
+        "recent_updates": len(inventory_updates)
+    })
+
 @app.route('/webhook', methods=['GET', 'POST'])
 def webhook():
     """Enhanced webhook with group features"""
     
     if request.method == 'GET':
-        # Webhook verification (same as before)
+        # Webhook verification
         mode = request.args.get('hub.mode')
         token = request.args.get('hub.verify_token')
         challenge = request.args.get('hub.challenge')
