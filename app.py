@@ -1,3 +1,4 @@
+
 # group_admin_bot.py - Alternative Group Management Solution
 import os
 import json
@@ -274,15 +275,21 @@ def process_group_inventory_command(message_text, sender_number):
 @app.route('/')
 def home():
     """Landing page for the inventory bot"""
-    return """
+    # Use f-string to avoid conflicts with CSS braces
+    group_count = len(GROUP_MEMBERS)
+    inventory_count = len(inventory)
+    updates_count = len(inventory_updates)
+    webhook_url = f"{request.host_url}webhook"
+    
+    return f"""
     <html>
     <head>
         <title>WhatsApp Inventory Bot</title>
         <style>
-            body { font-family: Arial, sans-serif; max-width: 600px; margin: 50px auto; padding: 20px; }
-            h1 { color: #25d366; }
-            .status { background: #e8f5e8; padding: 10px; border-radius: 5px; margin: 20px 0; }
-            .command { background: #f0f0f0; padding: 5px; margin: 5px 0; font-family: monospace; }
+            body {{ font-family: Arial, sans-serif; max-width: 600px; margin: 50px auto; padding: 20px; }}
+            h1 {{ color: #25d366; }}
+            .status {{ background: #e8f5e8; padding: 10px; border-radius: 5px; margin: 20px 0; }}
+            .command {{ background: #f0f0f0; padding: 5px; margin: 5px 0; font-family: monospace; }}
         </style>
     </head>
     <body>
@@ -313,21 +320,16 @@ def home():
         <div class="command">help</div>
         
         <h2>📊 Current Status:</h2>
-        <p><strong>Group Members:</strong> {}</p>
-        <p><strong>Inventory Items:</strong> {}</p>
-        <p><strong>Recent Updates:</strong> {}</p>
+        <p><strong>Group Members:</strong> {group_count}</p>
+        <p><strong>Inventory Items:</strong> {inventory_count}</p>
+        <p><strong>Recent Updates:</strong> {updates_count}</p>
         
         <div class="status">
-            <strong>🔗 Webhook URL:</strong> {}/webhook
+            <strong>🔗 Webhook URL:</strong> {webhook_url}
         </div>
     </body>
     </html>
-    """.format(
-        len(GROUP_MEMBERS),
-        len(inventory),
-        len(inventory_updates),
-        request.host_url
-    )
+    """
 
 # Add a health check endpoint
 @app.route('/health')
