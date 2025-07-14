@@ -330,6 +330,18 @@ def home():
     </html>
     """
 
+# Add a test endpoint to check environment variables
+@app.route('/test')
+def test_config():
+    """Test endpoint to check configuration"""
+    verify_token = os.getenv('VERIFY_TOKEN')
+    return jsonify({
+        "verify_token_set": verify_token is not None,
+        "verify_token_length": len(verify_token) if verify_token else 0,
+        "verify_token_preview": verify_token[:5] + "..." if verify_token and len(verify_token) > 5 else verify_token,
+        "environment_vars": list(os.environ.keys())
+    })
+
 # Add a health check endpoint
 @app.route('/health')
 def health_check():
@@ -347,14 +359,31 @@ def webhook():
     """Enhanced webhook with group features"""
     
     if request.method == 'GET':
-        # Webhook verification
+        # Webhook verification with detailed logging
         mode = request.args.get('hub.mode')
         token = request.args.get('hub.verify_token')
         challenge = request.args.get('hub.challenge')
         
-        if mode == 'subscribe' and token == os.getenv('VERIFY_TOKEN'):
+        # Debug information
+        print(f"Webhook verification attempt:")
+        print(f"  Mode: {mode}")
+        print(f"  Token received: {token}")
+        print(f"  Expected token: {os.getenv('VERIFY_TOKEN')}")
+        print(f"  Challenge: {challenge}")
+        
+        # Check if VERIFY_TOKEN is set
+        verify_token = os.getenv('VERIFY_TOKEN')
+        if not verify_token:
+            print("ERROR: VERIFY_TOKEN environment variable not set!")
+            return "VERIFY_TOKEN not configured", 500
+        
+        if mode == 'subscribe' and token == verify_token:
+            print("✅ Webhook verification successful!")
             return challenge
         else:
+            print("❌ Webhook verification failed!")
+            print(f"  Mode check: {mode == 'subscribe'}")
+            print(f"  Token check: {token == verify_token}")
             return "Verification failed", 403
     
     elif request.method == 'POST':
