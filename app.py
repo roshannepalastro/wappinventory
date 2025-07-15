@@ -1,9 +1,8 @@
-
 import os
 import json
 import requests
-import psycopg
-from psycopg.rows import dict_row
+import psycopg2
+from psycopg2.extras import RealDictCursor
 from flask import Flask, request, jsonify
 from datetime import datetime
 import logging
@@ -14,13 +13,13 @@ load_dotenv()
 
 app = Flask(__name__)
 
-# Database connection with psycopg3
+# Database connection with psycopg2
 def get_db_connection():
-    """Get database connection with psycopg3"""
+    """Get database connection with psycopg2"""
     try:
-        conn = psycopg.connect(
+        conn = psycopg2.connect(
             host=os.getenv('DB_HOST'),
-            dbname=os.getenv('DB_NAME'),
+            database=os.getenv('DB_NAME'),
             user=os.getenv('DB_USER'),
             password=os.getenv('DB_PASSWORD'),
             port=os.getenv('DB_PORT', 5432),
@@ -95,6 +94,7 @@ def init_database():
         
     except Exception as e:
         print(f"❌ Database initialization failed: {e}")
+        conn.rollback()
         return False
     finally:
         if conn:
@@ -159,12 +159,12 @@ def add_or_update_member(phone_number):
         
     except Exception as e:
         print(f"❌ Error updating member: {e}")
+        conn.rollback()
         return False
     finally:
         if conn:
             conn.close()
 
-# Update cursor usage
 def get_all_members():
     """Get all members from database"""
     conn = get_db_connection()
@@ -172,31 +172,29 @@ def get_all_members():
         return {}
     
     try:
-        with conn.cursor(row_factory=dict_row) as cursor:
-            cursor.execute('SELECT * FROM members ORDER BY joined_date')
-            members = cursor.fetchall()
-            
-            # Convert to dictionary format
-            result = {}
-            for member in members:
-                result[member['phone_number']] = {
-                    'name': member['name'],
-                    'joined_date': member['joined_date'].isoformat(),
-                    'is_admin': member['is_admin'],
-                    'message_count': member['message_count'],
-                    'last_activity': member['last_activity'].isoformat()
-                }
-            
-            return result
-            
+        cursor = conn.cursor(cursor_factory=RealDictCursor)
+        cursor.execute('SELECT * FROM members ORDER BY joined_date')
+        members = cursor.fetchall()
+        
+        # Convert to dictionary format
+        result = {}
+        for member in members:
+            result[member['phone_number']] = {
+                'name': member['name'],
+                'joined_date': member['joined_date'].isoformat(),
+                'is_admin': member['is_admin'],
+                'message_count': member['message_count'],
+                'last_activity': member['last_activity'].isoformat()
+            }
+        
+        return result
+        
     except Exception as e:
         print(f"❌ Error getting members: {e}")
         return {}
     finally:
         if conn:
             conn.close()
-
-
 
 def update_inventory(item, quantity):
     """Update inventory in database"""
@@ -211,19 +209,20 @@ def update_inventory(item, quantity):
             # Remove item
             cursor.execute('DELETE FROM inventory WHERE item_name = %s', (item,))
         else:
-            # Update or insert item
+            # Update or insert item using psycopg2 syntax
             cursor.execute('''
                 INSERT INTO inventory (item_name, quantity, last_updated)
                 VALUES (%s, %s, %s)
                 ON CONFLICT (item_name) 
-                DO UPDATE SET quantity = %s, last_updated = %s
-            ''', (item, quantity, datetime.now(), quantity, datetime.now()))
+                DO UPDATE SET quantity = EXCLUDED.quantity, last_updated = EXCLUDED.last_updated
+            ''', (item, quantity, datetime.now()))
         
         conn.commit()
         return True
         
     except Exception as e:
         print(f"❌ Error updating inventory: {e}")
+        conn.rollback()
         return False
     finally:
         if conn:
@@ -275,6 +274,7 @@ def remove_member(phone_number):
         
     except Exception as e:
         print(f"❌ Error removing member: {e}")
+        conn.rollback()
         return False
     finally:
         if conn:
@@ -301,6 +301,7 @@ def clear_inventory():
         
     except Exception as e:
         print(f"❌ Error clearing inventory: {e}")
+        conn.rollback()
         return False
     finally:
         if conn:
