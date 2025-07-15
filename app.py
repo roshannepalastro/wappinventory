@@ -1,8 +1,9 @@
+
 import os
 import json
 import requests
-import psycopg2
-from psycopg2.extras import RealDictCursor
+import psycopg
+from psycopg.rows import dict_row
 from flask import Flask, request, jsonify
 from datetime import datetime
 import logging
@@ -13,22 +14,23 @@ load_dotenv()
 
 app = Flask(__name__)
 
-# Database connection with SSL support
+# Database connection with psycopg3
 def get_db_connection():
-    """Get database connection with SSL support"""
+    """Get database connection with psycopg3"""
     try:
-        conn = psycopg2.connect(
+        conn = psycopg.connect(
             host=os.getenv('DB_HOST'),
-            database=os.getenv('DB_NAME'),
+            dbname=os.getenv('DB_NAME'),
             user=os.getenv('DB_USER'),
             password=os.getenv('DB_PASSWORD'),
             port=os.getenv('DB_PORT', 5432),
-            sslmode='require'  # Required for most cloud databases
+            sslmode='require'
         )
         return conn
     except Exception as e:
         print(f"❌ Database connection failed: {e}")
         return None
+
 
 def test_database_connection():
     """Test database connection on startup"""
@@ -162,6 +164,7 @@ def add_or_update_member(phone_number):
         if conn:
             conn.close()
 
+# Update cursor usage
 def get_all_members():
     """Get all members from database"""
     conn = get_db_connection()
@@ -169,29 +172,31 @@ def get_all_members():
         return {}
     
     try:
-        cursor = conn.cursor(cursor_factory=RealDictCursor)
-        cursor.execute('SELECT * FROM members ORDER BY joined_date')
-        members = cursor.fetchall()
-        
-        # Convert to dictionary format
-        result = {}
-        for member in members:
-            result[member['phone_number']] = {
-                'name': member['name'],
-                'joined_date': member['joined_date'].isoformat(),
-                'is_admin': member['is_admin'],
-                'message_count': member['message_count'],
-                'last_activity': member['last_activity'].isoformat()
-            }
-        
-        return result
-        
+        with conn.cursor(row_factory=dict_row) as cursor:
+            cursor.execute('SELECT * FROM members ORDER BY joined_date')
+            members = cursor.fetchall()
+            
+            # Convert to dictionary format
+            result = {}
+            for member in members:
+                result[member['phone_number']] = {
+                    'name': member['name'],
+                    'joined_date': member['joined_date'].isoformat(),
+                    'is_admin': member['is_admin'],
+                    'message_count': member['message_count'],
+                    'last_activity': member['last_activity'].isoformat()
+                }
+            
+            return result
+            
     except Exception as e:
         print(f"❌ Error getting members: {e}")
         return {}
     finally:
         if conn:
             conn.close()
+
+
 
 def update_inventory(item, quantity):
     """Update inventory in database"""
