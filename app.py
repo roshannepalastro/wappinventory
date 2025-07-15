@@ -1,180 +1,337 @@
 #!/usr/bin/env python3
 """
-SUPER SIMPLE BOT - NO FIREBASE
-This WILL work. Period.
+SIMPLE FIREBASE TEST APP
+This will tell you EXACTLY what's wrong with Firebase
 """
 
 import os
 import json
-import requests
+import traceback
 from flask import Flask, request, jsonify
 from datetime import datetime
 
 app = Flask(__name__)
 
-# Just use memory - no Firebase headaches
-MEMBERS = {}
+# Global variables
+db = None
+firebase_app = None
+firebase_status = "Not tested"
+firebase_error = None
 
-# Get WhatsApp credentials
-WHATSAPP_ACCESS_TOKEN = os.getenv('WHATSAPP_ACCESS_TOKEN')
-WHATSAPP_PHONE_NUMBER_ID = os.getenv('WHATSAPP_PHONE_NUMBER_ID')
-VERIFY_TOKEN = os.getenv('VERIFY_TOKEN')
-
-def send_whatsapp_message(to_number, message_text):
-    """Send WhatsApp message"""
-    url = f"https://graph.facebook.com/v17.0/{WHATSAPP_PHONE_NUMBER_ID}/messages"
+def test_firebase_step_by_step():
+    """Test Firebase initialization step by step"""
+    global db, firebase_app, firebase_status, firebase_error
     
-    headers = {
-        "Authorization": f"Bearer {WHATSAPP_ACCESS_TOKEN}",
-        "Content-Type": "application/json"
-    }
+    steps = []
     
-    data = {
-        "messaging_product": "whatsapp",
-        "to": to_number,
-        "type": "text",
-        "text": {"body": message_text}
-    }
-    
+    # Step 1: Check environment variable
     try:
-        response = requests.post(url, headers=headers, data=json.dumps(data))
-        response.raise_for_status()
-        return True
-    except:
-        return False
-
-def process_command(message_text, sender_number):
-    """Process commands - SUPER SIMPLE"""
-    message_text = message_text.lower().strip()
-    sender_name = f"User{sender_number[-4:]}"
-    
-    if message_text == "join":
-        if sender_number in MEMBERS:
-            return f"✅ {sender_name}, you're already in the group!"
-        
-        MEMBERS[sender_number] = {
-            'name': sender_name,
-            'joined_at': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-        }
-        return f"✅ Welcome {sender_name}! You joined the group."
-    
-    elif message_text == "leave":
-        if sender_number not in MEMBERS:
-            return f"❌ {sender_name}, you're not in the group."
-        
-        del MEMBERS[sender_number]
-        return f"✅ {sender_name}, you left the group."
-    
-    elif message_text == "members":
-        if not MEMBERS:
-            return "📋 No members in the group."
-        
-        member_list = "👥 Group Members:\n"
-        for i, (phone, data) in enumerate(MEMBERS.items(), 1):
-            member_list += f"{i}. {data['name']} (joined: {data['joined_at']})\n"
-        
-        return member_list
-    
-    elif message_text == "help":
-        return """🤖 Available Commands:
-        
-join - Join the group
-leave - Leave the group  
-members - View all members
-help - Show this help"""
-    
-    else:
-        return f"❓ Unknown command. Send 'help' for available commands."
-
-@app.route('/webhook', methods=['GET', 'POST'])
-def webhook():
-    if request.method == 'GET':
-        # Webhook verification
-        mode = request.args.get('hub.mode')
-        token = request.args.get('hub.verify_token')
-        challenge = request.args.get('hub.challenge')
-        
-        if mode == 'subscribe' and token == VERIFY_TOKEN:
-            return challenge
+        firebase_creds = os.getenv('FIREBASE_CREDENTIALS')
+        if not firebase_creds:
+            steps.append("❌ FIREBASE_CREDENTIALS environment variable not found")
+            firebase_status = "ENV_VAR_MISSING"
+            firebase_error = "FIREBASE_CREDENTIALS environment variable not set"
+            return steps
         else:
-            return 'Forbidden', 403
+            steps.append("✅ FIREBASE_CREDENTIALS environment variable found")
+    except Exception as e:
+        steps.append(f"❌ Error checking environment: {e}")
+        firebase_status = "ENV_ERROR"
+        firebase_error = str(e)
+        return steps
     
-    elif request.method == 'POST':
-        # Handle incoming messages
-        data = request.get_json()
+    # Step 2: Parse JSON
+    try:
+        firebase_json = json.loads(firebase_creds)
+        steps.append("✅ Firebase JSON parsed successfully")
         
-        try:
-            entry = data.get('entry', [{}])[0]
-            changes = entry.get('changes', [{}])[0]
-            value = changes.get('value', {})
-            messages = value.get('messages', [])
-            
-            if messages:
-                message = messages[0]
-                sender_number = message.get('from')
-                message_text = message.get('text', {}).get('body', '')
-                
-                # Process command
-                response = process_command(message_text, sender_number)
-                
-                # Send response
-                send_whatsapp_message(sender_number, response)
-                    
-        except Exception as e:
-            print(f"Error: {e}")
+        # Check required fields
+        required_fields = ['type', 'project_id', 'private_key', 'client_email']
+        missing_fields = [field for field in required_fields if field not in firebase_json]
         
-        return jsonify({"status": "ok"})
+        if missing_fields:
+            steps.append(f"❌ Missing required fields: {missing_fields}")
+            firebase_status = "INVALID_JSON"
+            firebase_error = f"Missing fields: {missing_fields}"
+            return steps
+        else:
+            steps.append("✅ All required JSON fields present")
+            steps.append(f"   Project ID: {firebase_json.get('project_id')}")
+            steps.append(f"   Client Email: {firebase_json.get('client_email')}")
+    except json.JSONDecodeError as e:
+        steps.append(f"❌ Invalid JSON format: {e}")
+        firebase_status = "JSON_ERROR"
+        firebase_error = f"JSON parsing error: {e}"
+        return steps
+    except Exception as e:
+        steps.append(f"❌ Error parsing JSON: {e}")
+        firebase_status = "JSON_ERROR"
+        firebase_error = str(e)
+        return steps
+    
+    # Step 3: Import Firebase modules
+    try:
+        import firebase_admin
+        from firebase_admin import credentials, firestore
+        steps.append("✅ Firebase modules imported successfully")
+    except ImportError as e:
+        steps.append(f"❌ Firebase modules import failed: {e}")
+        firebase_status = "IMPORT_ERROR"
+        firebase_error = f"Import error: {e}"
+        return steps
+    except Exception as e:
+        steps.append(f"❌ Error importing Firebase: {e}")
+        firebase_status = "IMPORT_ERROR"
+        firebase_error = str(e)
+        return steps
+    
+    # Step 4: Initialize Firebase
+    try:
+        # Check if already initialized
+        if firebase_admin._apps:
+            steps.append("✅ Firebase already initialized")
+            firebase_app = firebase_admin.get_app()
+        else:
+            cred = credentials.Certificate(firebase_json)
+            firebase_app = firebase_admin.initialize_app(cred)
+            steps.append("✅ Firebase app initialized successfully")
+    except Exception as e:
+        steps.append(f"❌ Firebase initialization failed: {e}")
+        steps.append(f"   Full error: {traceback.format_exc()}")
+        firebase_status = "INIT_ERROR"
+        firebase_error = str(e)
+        return steps
+    
+    # Step 5: Get Firestore client
+    try:
+        db = firestore.client()
+        steps.append("✅ Firestore client created successfully")
+    except Exception as e:
+        steps.append(f"❌ Firestore client creation failed: {e}")
+        firebase_status = "FIRESTORE_ERROR"
+        firebase_error = str(e)
+        return steps
+    
+    # Step 6: Test write operation
+    try:
+        test_ref = db.collection('test').document('connection_test')
+        test_ref.set({
+            'test': True,
+            'timestamp': datetime.now(),
+            'message': 'Firebase test successful'
+        })
+        steps.append("✅ Test document written successfully")
+    except Exception as e:
+        steps.append(f"❌ Test write failed: {e}")
+        firebase_status = "WRITE_ERROR"
+        firebase_error = str(e)
+        return steps
+    
+    # Step 7: Test read operation
+    try:
+        doc = test_ref.get()
+        if doc.exists:
+            steps.append("✅ Test document read successfully")
+            steps.append(f"   Document data: {doc.to_dict()}")
+        else:
+            steps.append("❌ Test document not found after write")
+            firebase_status = "READ_ERROR"
+            firebase_error = "Document not found after write"
+            return steps
+    except Exception as e:
+        steps.append(f"❌ Test read failed: {e}")
+        firebase_status = "READ_ERROR"
+        firebase_error = str(e)
+        return steps
+    
+    # Step 8: Test collection operations
+    try:
+        # Add a few test documents
+        test_collection = db.collection('test_users')
+        test_collection.document('user1').set({'name': 'Test User 1', 'created': datetime.now()})
+        test_collection.document('user2').set({'name': 'Test User 2', 'created': datetime.now()})
+        
+        # Read all documents
+        docs = test_collection.stream()
+        doc_count = len(list(docs))
+        steps.append(f"✅ Collection operations successful ({doc_count} documents)")
+    except Exception as e:
+        steps.append(f"❌ Collection operations failed: {e}")
+        firebase_status = "COLLECTION_ERROR"
+        firebase_error = str(e)
+        return steps
+    
+    # All tests passed!
+    firebase_status = "SUCCESS"
+    firebase_error = None
+    steps.append("🎉 ALL FIREBASE TESTS PASSED!")
+    
+    return steps
 
 @app.route('/')
 def home():
-    """Status page"""
+    """Main test page"""
+    steps = test_firebase_step_by_step()
+    
+    steps_html = "<br>".join(steps)
+    
     return f"""
     <!DOCTYPE html>
     <html>
     <head>
-        <title>Simple WhatsApp Bot</title>
+        <title>Firebase Test App</title>
         <style>
-            body {{ font-family: Arial, sans-serif; margin: 20px; }}
-            .status {{ padding: 10px; margin: 10px 0; border-radius: 5px; }}
-            .success {{ background-color: #d4edda; color: #155724; }}
-            .error {{ background-color: #f8d7da; color: #721c24; }}
+            body {{ 
+                font-family: 'Courier New', monospace; 
+                margin: 20px; 
+                background-color: #f5f5f5; 
+            }}
+            .container {{ 
+                max-width: 800px; 
+                margin: 0 auto; 
+                background: white; 
+                padding: 20px; 
+                border-radius: 8px; 
+                box-shadow: 0 2px 4px rgba(0,0,0,0.1); 
+            }}
+            .status {{ 
+                padding: 15px; 
+                margin: 10px 0; 
+                border-radius: 5px; 
+                font-weight: bold; 
+            }}
+            .success {{ 
+                background-color: #d4edda; 
+                color: #155724; 
+                border: 1px solid #c3e6cb; 
+            }}
+            .error {{ 
+                background-color: #f8d7da; 
+                color: #721c24; 
+                border: 1px solid #f5c6cb; 
+            }}
+            .warning {{ 
+                background-color: #fff3cd; 
+                color: #856404; 
+                border: 1px solid #ffeaa7; 
+            }}
+            .steps {{ 
+                background-color: #f8f9fa; 
+                padding: 15px; 
+                border-radius: 5px; 
+                font-family: 'Courier New', monospace; 
+                white-space: pre-wrap; 
+            }}
+            .refresh {{ 
+                background-color: #007bff; 
+                color: white; 
+                padding: 10px 20px; 
+                border: none; 
+                border-radius: 5px; 
+                cursor: pointer; 
+                font-size: 16px; 
+                margin: 10px 0; 
+            }}
+            .refresh:hover {{ 
+                background-color: #0056b3; 
+            }}
         </style>
     </head>
     <body>
-        <h1>🤖 Simple WhatsApp Bot</h1>
-        
-        <div class="status {'success' if WHATSAPP_ACCESS_TOKEN else 'error'}">
-            <strong>WhatsApp Token:</strong> {'✅ Ready' if WHATSAPP_ACCESS_TOKEN else '❌ Missing'}
+        <div class="container">
+            <h1>🔥 Firebase Test App</h1>
+            
+            <div class="status {'success' if firebase_status == 'SUCCESS' else 'error'}">
+                <strong>Firebase Status:</strong> {firebase_status}
+                {f'<br><strong>Error:</strong> {firebase_error}' if firebase_error else ''}
+            </div>
+            
+            <button class="refresh" onclick="location.reload()">🔄 Refresh Test</button>
+            
+            <h2>📋 Test Steps:</h2>
+            <div class="steps">{steps_html}</div>
+            
+            <h2>🔧 Troubleshooting:</h2>
+            <ul>
+                <li><strong>ENV_VAR_MISSING:</strong> Add FIREBASE_CREDENTIALS to Render environment</li>
+                <li><strong>JSON_ERROR:</strong> Check your Firebase JSON format - must be single line</li>
+                <li><strong>IMPORT_ERROR:</strong> Install firebase-admin: pip install firebase-admin</li>
+                <li><strong>INIT_ERROR:</strong> Check Firebase project permissions</li>
+                <li><strong>WRITE_ERROR:</strong> Check Firestore security rules</li>
+            </ul>
+            
+            <h2>📝 Environment Variables:</h2>
+            <ul>
+                <li><strong>FIREBASE_CREDENTIALS:</strong> {'✅ SET' if os.getenv('FIREBASE_CREDENTIALS') else '❌ MISSING'}</li>
+            </ul>
+            
+            <p><em>Last tested: {datetime.now()}</em></p>
         </div>
-        
-        <div class="status {'success' if WHATSAPP_PHONE_NUMBER_ID else 'error'}">
-            <strong>Phone Number ID:</strong> {'✅ Ready' if WHATSAPP_PHONE_NUMBER_ID else '❌ Missing'}
-        </div>
-        
-        <div class="status {'success' if VERIFY_TOKEN else 'error'}">
-            <strong>Verify Token:</strong> {'✅ Ready' if VERIFY_TOKEN else '❌ Missing'}
-        </div>
-        
-        <div class="status success">
-            <strong>Current Members:</strong> {len(MEMBERS)} people in group
-        </div>
-        
-        <h2>Commands:</h2>
-        <ul>
-            <li><strong>join</strong> - Join the group</li>
-            <li><strong>leave</strong> - Leave the group</li>
-            <li><strong>members</strong> - View all members</li>
-            <li><strong>help</strong> - Show help</li>
-        </ul>
-        
-        <h2>Current Members:</h2>
-        {'<ul>' + ''.join([f'<li>{data["name"]} (joined: {data["joined_at"]})</li>' for data in MEMBERS.values()]) + '</ul>' if MEMBERS else '<p>No members yet</p>'}
-        
-        <p><em>Updated: {datetime.now()}</em></p>
     </body>
     </html>
     """
 
+@app.route('/test-add-user')
+def test_add_user():
+    """Test adding a user to Firebase"""
+    if firebase_status != "SUCCESS" or not db:
+        return {"error": "Firebase not initialized", "status": firebase_status}
+    
+    try:
+        # Add a test user
+        user_ref = db.collection('group_members').document('test_user_123')
+        user_ref.set({
+            'name': 'Test User',
+            'phone': '+1234567890',
+            'joined_at': datetime.now(),
+            'test': True
+        })
+        
+        return {"message": "User added successfully", "status": "success"}
+    except Exception as e:
+        return {"error": str(e), "status": "failed"}
+
+@app.route('/test-get-users')
+def test_get_users():
+    """Test getting users from Firebase"""
+    if firebase_status != "SUCCESS" or not db:
+        return {"error": "Firebase not initialized", "status": firebase_status}
+    
+    try:
+        # Get all users
+        users_ref = db.collection('group_members')
+        docs = users_ref.stream()
+        
+        users = []
+        for doc in docs:
+            user_data = doc.to_dict()
+            user_data['id'] = doc.id
+            users.append(user_data)
+        
+        return {"users": users, "count": len(users), "status": "success"}
+    except Exception as e:
+        return {"error": str(e), "status": "failed"}
+
+@app.route('/firebase-info')
+def firebase_info():
+    """Get Firebase configuration info"""
+    firebase_creds = os.getenv('FIREBASE_CREDENTIALS')
+    
+    if not firebase_creds:
+        return {"error": "No Firebase credentials found"}
+    
+    try:
+        firebase_json = json.loads(firebase_creds)
+        return {
+            "project_id": firebase_json.get('project_id'),
+            "client_email": firebase_json.get('client_email'),
+            "type": firebase_json.get('type'),
+            "has_private_key": 'private_key' in firebase_json,
+            "status": firebase_status
+        }
+    except Exception as e:
+        return {"error": str(e)}
+
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
-    app.run(host='0.0.0.0', port=port)
+    app.run(host='0.0.0.0', port=port, debug=True)
