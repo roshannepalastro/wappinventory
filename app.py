@@ -23,39 +23,64 @@ GROUP_ADMINS = {
 # Initialize Firebase
 db = None
 
+
+# Enhanced Firebase initialization with better error reporting
 def init_firebase():
-    """Initialize Firebase connection"""
+    """Initialize Firebase connection with detailed error reporting"""
     global db
     try:
-        # Initialize Firebase Admin SDK
-        # You'll need to set FIREBASE_CREDENTIALS as an environment variable
-        # containing your Firebase service account key JSON
+        logger.info("Initializing Firebase...")
         
+        # Check for Firebase credentials
         firebase_creds = os.getenv('FIREBASE_CREDENTIALS')
+        
         if firebase_creds:
-            # Parse the JSON credentials from environment variable
-            cred_dict = json.loads(firebase_creds)
-            cred = credentials.Certificate(cred_dict)
+            logger.info("Using Firebase credentials from environment variable")
+            try:
+                cred_dict = json.loads(firebase_creds)
+                cred = credentials.Certificate(cred_dict)
+            except json.JSONDecodeError as e:
+                logger.error(f"Invalid JSON in FIREBASE_CREDENTIALS: {str(e)}")
+                return False
         else:
-            # Fallback to service account key file (for local development)
+            logger.info("Using Firebase credentials from file")
+            if not os.path.exists('firebase-service-account.json'):
+                logger.error("Firebase service account file not found")
+                return False
             cred = credentials.Certificate('firebase-service-account.json')
         
-        firebase_admin.initialize_app(cred)
+        # Initialize Firebase app
+        if not firebase_admin._apps:
+            firebase_admin.initialize_app(cred)
+            logger.info("Firebase app initialized")
+        else:
+            logger.info("Firebase app already initialized")
+        
+        # Initialize Firestore client
         db = firestore.client()
-        logger.info("Firebase initialized successfully")
+        
+        # Test the connection
+        test_doc = db.collection('_test').document('connection_test')
+        test_doc.set({'test': True, 'timestamp': firestore.SERVER_TIMESTAMP})
+        test_doc.delete()  # Clean up
+        
+        logger.info("Firebase initialized and tested successfully")
         return True
         
     except Exception as e:
         logger.error(f"Firebase initialization error: {str(e)}")
+        logger.error(f"Error type: {type(e).__name__}")
         return False
 
 # Firebase Database Manager
+# Enhanced Firebase Manager with detailed error logging
 class FirebaseManager:
     @staticmethod
     def add_group_member(phone_number, name=None):
-        """Add member to group"""
+        """Add member to group with enhanced error handling"""
         if not db:
-            return False
+            logger.error("Firebase database not initialized")
+            return False, "Database not initialized"
         
         try:
             member_data = {
@@ -66,12 +91,39 @@ class FirebaseManager:
             }
             
             # Use phone number as document ID for easy lookup
-            db.collection('group_members').document(phone_number).set(member_data)
-            logger.info(f"Added group member: {phone_number}")
-            return True
+            doc_ref = db.collection('group_members').document(phone_number)
+            doc_ref.set(member_data)
+            
+            logger.info(f"Successfully added group member: {phone_number}")
+            return True, "Success"
             
         except Exception as e:
-            logger.error(f"Error adding group member: {str(e)}")
+            error_msg = f"Error adding group member: {str(e)}"
+            logger.error(error_msg)
+            return False, error_msg
+    
+    @staticmethod
+    def is_group_member(phone_number):
+        """Check if user is active group member with enhanced error handling"""
+        if not db:
+            logger.error("Firebase database not initialized")
+            return False
+        
+        try:
+            doc_ref = db.collection('group_members').document(phone_number)
+            doc = doc_ref.get()
+            
+            if doc.exists:
+                data = doc.to_dict()
+                is_active = data.get('is_active', False)
+                logger.info(f"User {phone_number} membership status: {is_active}")
+                return is_active
+            
+            logger.info(f"User {phone_number} not found in group members")
+            return False
+            
+        except Exception as e:
+            logger.error(f"Error checking group membership: {str(e)}")
             return False
     
     @staticmethod
@@ -117,24 +169,6 @@ class FirebaseManager:
             logger.error(f"Error getting group members: {str(e)}")
             return []
     
-    @staticmethod
-    def is_group_member(phone_number):
-        """Check if user is active group member"""
-        if not db:
-            return False
-        
-        try:
-            doc_ref = db.collection('group_members').document(phone_number)
-            doc = doc_ref.get()
-            
-            if doc.exists:
-                data = doc.to_dict()
-                return data.get('is_active', False)
-            return False
-            
-        except Exception as e:
-            logger.error(f"Error checking group membership: {str(e)}")
-            return False
     
     @staticmethod
     def update_inventory(item_name, quantity):
@@ -338,36 +372,60 @@ def broadcast_to_group(message, exclude_number=None):
     
     return sent_count
 
+# Enhanced join command with better error handling
 def process_group_inventory_command(message_text, sender_number):
-    """Process inventory commands with Firebase persistence"""
+    """Process inventory commands with enhanced error handling"""
     
     message_text = message_text.lower().strip()
     sender_name = GROUP_ADMINS.get(sender_number, f"User {sender_number[-4:]}")
     
-    # Join group command
+    # Join group command with enhanced error handling
     if message_text == "join":
-        if not FirebaseManager.is_group_member(sender_number):
-            if FirebaseManager.add_group_member(sender_number, sender_name):
-                members = FirebaseManager.get_group_members()
-                response = f"✅ {sender_name} joined the inventory group!\n"
-                response += f"👥 Total members: {len(members)}\n"
-                response += "Type 'help' for commands."
-                
-                # Notify other members
-                broadcast_message = f"👋 {sender_name} joined the inventory group!"
-                broadcast_to_group(broadcast_message, exclude_number=sender_number)
-                
-                # Log the action
-                FirebaseManager.add_inventory_update(
-                    sender_number, sender_name, "join", 
-                    description="Joined the group"
-                )
-                
-                return response
+        logger.info(f"Processing join command from {sender_number}")
+        
+        # Check if Firebase is initialized
+        if not db:
+            logger.error("Firebase not initialized")
+            return "❌ System error: Database not available. Please contact admin."
+        
+        # Check current membership status
+        is_member = FirebaseManager.is_group_member(sender_number)
+        logger.info(f"Current membership status for {sender_number}: {is_member}")
+        
+        if not is_member:
+            # Attempt to add member
+            success, error_msg = FirebaseManager.add_group_member(sender_number, sender_name)
+            
+            if success:
+                try:
+                    members = FirebaseManager.get_group_members()
+                    response = f"✅ {sender_name} joined the inventory group!\n"
+                    response += f"👥 Total members: {len(members)}\n"
+                    response += "Type 'help' for commands."
+                    
+                    # Notify other members
+                    broadcast_message = f"👋 {sender_name} joined the inventory group!"
+                    broadcast_to_group(broadcast_message, exclude_number=sender_number)
+                    
+                    # Log the action
+                    FirebaseManager.add_inventory_update(
+                        sender_number, sender_name, "join", 
+                        description="Joined the group"
+                    )
+                    
+                    logger.info(f"Successfully processed join for {sender_number}")
+                    return response
+                    
+                except Exception as e:
+                    logger.error(f"Error in post-join processing: {str(e)}")
+                    return "✅ Joined successfully, but some features may be limited."
             else:
-                return "❌ Error joining group. Please try again."
+                logger.error(f"Failed to add member {sender_number}: {error_msg}")
+                return f"❌ Error joining group: {error_msg}"
         else:
+            logger.info(f"User {sender_number} already in group")
             return "✅ You're already in the group!"
+    
     
     # Leave group command
     elif message_text == "leave":
@@ -778,12 +836,13 @@ def firebase_status():
         "timestamp": datetime.now().isoformat()
     })
 
+# Enhanced webhook with better error handling
 @app.route('/webhook', methods=['GET', 'POST'])
 def webhook():
-    """Enhanced webhook with Firebase persistence"""
+    """Enhanced webhook with better error handling"""
     
     if request.method == 'GET':
-        # Webhook verification
+        # Webhook verification (unchanged)
         mode = request.args.get('hub.mode')
         token = request.args.get('hub.verify_token')
         challenge = request.args.get('hub.challenge')
@@ -805,6 +864,11 @@ def webhook():
             data = request.get_json()
             logger.info(f"Received webhook data: {json.dumps(data, indent=2)}")
             
+            # Check Firebase status before processing
+            if not db:
+                logger.error("Firebase not initialized - cannot process messages")
+                return "Firebase not available", 500
+            
             if 'entry' in data:
                 for entry in data['entry']:
                     if 'changes' in entry:
@@ -816,15 +880,22 @@ def webhook():
                                     
                                     logger.info(f"Processing message from {sender_number}: '{message_text}'")
                                     
-                                    # Process with Firebase persistence
-                                    response = process_group_inventory_command(message_text, sender_number)
-                                    logger.info(f"Bot response: {response}")
-                                    
-                                    # Send response
-                                    if send_whatsapp_message(sender_number, response):
-                                        logger.info("Response sent successfully")
-                                    else:
-                                        logger.error("Failed to send response")
+                                    try:
+                                        # Process with enhanced error handling
+                                        response = process_group_inventory_command(message_text, sender_number)
+                                        logger.info(f"Bot response: {response}")
+                                        
+                                        # Send response
+                                        if send_whatsapp_message(sender_number, response):
+                                            logger.info("Response sent successfully")
+                                        else:
+                                            logger.error("Failed to send response")
+                                            
+                                    except Exception as msg_error:
+                                        logger.error(f"Error processing message: {str(msg_error)}")
+                                        # Send error message to user
+                                        error_response = "❌ System error occurred. Please try again or contact admin."
+                                        send_whatsapp_message(sender_number, error_response)
             
             return "OK", 200
             
