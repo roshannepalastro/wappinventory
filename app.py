@@ -1,11 +1,18 @@
-# group_admin_bot.py - Alternative Group Management Solution
+# group_admin_bot.py - Enhanced with Firebase Firestore Support
 import os
 import json
 import requests
+import firebase_admin
+from firebase_admin import credentials, firestore
 from flask import Flask, request, jsonify
 from datetime import datetime
+import logging
 
 app = Flask(__name__)
+
+# Setup logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 # Group admin configuration
 GROUP_ADMINS = {
@@ -13,12 +20,268 @@ GROUP_ADMINS = {
     # Add more admin numbers here
 }
 
-# Store group member numbers
-GROUP_MEMBERS = set()
+# Initialize Firebase
+db = None
 
-# Enhanced inventory with group features
-inventory = {}
-inventory_updates = []  # Store update history
+def init_firebase():
+    """Initialize Firebase connection"""
+    global db
+    try:
+        # Initialize Firebase Admin SDK
+        # You'll need to set FIREBASE_CREDENTIALS as an environment variable
+        # containing your Firebase service account key JSON
+        
+        firebase_creds = os.getenv('FIREBASE_CREDENTIALS')
+        if firebase_creds:
+            # Parse the JSON credentials from environment variable
+            cred_dict = json.loads(firebase_creds)
+            cred = credentials.Certificate(cred_dict)
+        else:
+            # Fallback to service account key file (for local development)
+            cred = credentials.Certificate('firebase-service-account.json')
+        
+        firebase_admin.initialize_app(cred)
+        db = firestore.client()
+        logger.info("Firebase initialized successfully")
+        return True
+        
+    except Exception as e:
+        logger.error(f"Firebase initialization error: {str(e)}")
+        return False
+
+# Firebase Database Manager
+class FirebaseManager:
+    @staticmethod
+    def add_group_member(phone_number, name=None):
+        """Add member to group"""
+        if not db:
+            return False
+        
+        try:
+            member_data = {
+                'phone_number': phone_number,
+                'name': name or f"User {phone_number[-4:]}",
+                'joined_at': firestore.SERVER_TIMESTAMP,
+                'is_active': True
+            }
+            
+            # Use phone number as document ID for easy lookup
+            db.collection('group_members').document(phone_number).set(member_data)
+            logger.info(f"Added group member: {phone_number}")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Error adding group member: {str(e)}")
+            return False
+    
+    @staticmethod
+    def remove_group_member(phone_number):
+        """Remove member from group"""
+        if not db:
+            return False
+        
+        try:
+            db.collection('group_members').document(phone_number).update({
+                'is_active': False,
+                'left_at': firestore.SERVER_TIMESTAMP
+            })
+            logger.info(f"Removed group member: {phone_number}")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Error removing group member: {str(e)}")
+            return False
+    
+    @staticmethod
+    def get_group_members():
+        """Get all active group members"""
+        if not db:
+            return []
+        
+        try:
+            members_ref = db.collection('group_members')
+            query = members_ref.where('is_active', '==', True)
+            docs = query.stream()
+            
+            members = []
+            for doc in docs:
+                member_data = doc.to_dict()
+                members.append({
+                    'phone_number': member_data['phone_number'],
+                    'name': member_data['name']
+                })
+            
+            return members
+            
+        except Exception as e:
+            logger.error(f"Error getting group members: {str(e)}")
+            return []
+    
+    @staticmethod
+    def is_group_member(phone_number):
+        """Check if user is active group member"""
+        if not db:
+            return False
+        
+        try:
+            doc_ref = db.collection('group_members').document(phone_number)
+            doc = doc_ref.get()
+            
+            if doc.exists:
+                data = doc.to_dict()
+                return data.get('is_active', False)
+            return False
+            
+        except Exception as e:
+            logger.error(f"Error checking group membership: {str(e)}")
+            return False
+    
+    @staticmethod
+    def update_inventory(item_name, quantity):
+        """Update inventory item"""
+        if not db:
+            return False
+        
+        try:
+            inventory_data = {
+                'item_name': item_name,
+                'quantity': quantity,
+                'updated_at': firestore.SERVER_TIMESTAMP
+            }
+            
+            # Use item name as document ID
+            db.collection('inventory').document(item_name).set(inventory_data)
+            logger.info(f"Updated inventory: {item_name} = {quantity}")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Error updating inventory: {str(e)}")
+            return False
+    
+    @staticmethod
+    def get_inventory():
+        """Get current inventory"""
+        if not db:
+            return {}
+        
+        try:
+            inventory_ref = db.collection('inventory')
+            docs = inventory_ref.stream()
+            
+            inventory = {}
+            for doc in docs:
+                data = doc.to_dict()
+                if data['quantity'] > 0:
+                    inventory[data['item_name']] = data['quantity']
+            
+            return inventory
+            
+        except Exception as e:
+            logger.error(f"Error getting inventory: {str(e)}")
+            return {}
+    
+    @staticmethod
+    def get_inventory_item(item_name):
+        """Get specific inventory item"""
+        if not db:
+            return 0
+        
+        try:
+            doc_ref = db.collection('inventory').document(item_name)
+            doc = doc_ref.get()
+            
+            if doc.exists:
+                data = doc.to_dict()
+                return data.get('quantity', 0)
+            return 0
+            
+        except Exception as e:
+            logger.error(f"Error getting inventory item: {str(e)}")
+            return 0
+    
+    @staticmethod
+    def add_inventory_update(user_phone, user_name, action, item_name=None, quantity=None, description=None):
+        """Log inventory update"""
+        if not db:
+            return False
+        
+        try:
+            update_data = {
+                'user_phone': user_phone,
+                'user_name': user_name,
+                'action': action,
+                'item_name': item_name,
+                'quantity': quantity,
+                'description': description,
+                'timestamp': firestore.SERVER_TIMESTAMP
+            }
+            
+            db.collection('inventory_updates').add(update_data)
+            logger.info(f"Logged update: {user_name} - {action}")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Error adding inventory update: {str(e)}")
+            return False
+    
+    @staticmethod
+    def get_recent_updates(limit=10):
+        """Get recent inventory updates"""
+        if not db:
+            return []
+        
+        try:
+            updates_ref = db.collection('inventory_updates')
+            query = updates_ref.order_by('timestamp', direction=firestore.Query.DESCENDING).limit(limit)
+            docs = query.stream()
+            
+            updates = []
+            for doc in docs:
+                data = doc.to_dict()
+                updates.append(data)
+            
+            return updates
+            
+        except Exception as e:
+            logger.error(f"Error getting recent updates: {str(e)}")
+            return []
+    
+    @staticmethod
+    def clear_inventory():
+        """Clear all inventory"""
+        if not db:
+            return False
+        
+        try:
+            # Get all inventory documents
+            inventory_ref = db.collection('inventory')
+            docs = inventory_ref.stream()
+            
+            # Delete each document
+            for doc in docs:
+                doc.reference.delete()
+            
+            logger.info("Cleared all inventory")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Error clearing inventory: {str(e)}")
+            return False
+    
+    @staticmethod
+    def delete_inventory_item(item_name):
+        """Delete specific inventory item"""
+        if not db:
+            return False
+        
+        try:
+            db.collection('inventory').document(item_name).delete()
+            logger.info(f"Deleted inventory item: {item_name}")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Error deleting inventory item: {str(e)}")
+            return False
 
 def is_group_admin(phone_number):
     """Check if user is group admin"""
@@ -27,27 +290,14 @@ def is_group_admin(phone_number):
 def send_whatsapp_message(to_number, message):
     """Send WhatsApp message using Graph API"""
     try:
-        # WhatsApp Business API credentials
         access_token = os.getenv('WHATSAPP_ACCESS_TOKEN')
         phone_number_id = os.getenv('WHATSAPP_PHONE_NUMBER_ID')
         
-        print(f"🔍 Checking WhatsApp API credentials:")
-        print(f"  Access token set: {access_token is not None}")
-        print(f"  Phone number ID set: {phone_number_id is not None}")
-        
-        if not access_token:
-            print("❌ WHATSAPP_ACCESS_TOKEN environment variable not set!")
+        if not access_token or not phone_number_id:
+            logger.error("WhatsApp API credentials not configured")
             return False
-            
-        if not phone_number_id:
-            print("❌ WHATSAPP_PHONE_NUMBER_ID environment variable not set!")
-            return False
-        
-        print(f"  Access token length: {len(access_token)}")
-        print(f"  Phone number ID: {phone_number_id}")
         
         url = f"https://graph.facebook.com/v17.0/{phone_number_id}/messages"
-        print(f"  API URL: {url}")
         
         headers = {
             'Authorization': f'Bearer {access_token}',
@@ -63,70 +313,83 @@ def send_whatsapp_message(to_number, message):
             }
         }
         
-        print(f"  Sending to: {to_number}")
-        print(f"  Message length: {len(message)}")
-        
         response = requests.post(url, headers=headers, json=payload)
         
-        print(f"  Response status: {response.status_code}")
-        print(f"  Response body: {response.text}")
-        
         if response.status_code == 200:
-            print(f"✅ Message sent successfully to {to_number}")
+            logger.info(f"Message sent successfully to {to_number}")
             return True
         else:
-            print(f"❌ Failed to send message to {to_number}: {response.status_code}")
+            logger.error(f"Failed to send message: {response.status_code}")
             return False
             
     except Exception as e:
-        print(f"❌ Error sending message: {str(e)}")
-        import traceback
-        traceback.print_exc()
+        logger.error(f"Error sending message: {str(e)}")
         return False
 
 def broadcast_to_group(message, exclude_number=None):
     """Send message to all group members"""
+    members = FirebaseManager.get_group_members()
     sent_count = 0
-    for member in GROUP_MEMBERS:
-        if member != exclude_number:
-            if send_whatsapp_message(member, message):
+    
+    for member in members:
+        if member['phone_number'] != exclude_number:
+            if send_whatsapp_message(member['phone_number'], message):
                 sent_count += 1
+    
     return sent_count
 
 def process_group_inventory_command(message_text, sender_number):
-    """Process inventory commands with group features"""
+    """Process inventory commands with Firebase persistence"""
     
     message_text = message_text.lower().strip()
     sender_name = GROUP_ADMINS.get(sender_number, f"User {sender_number[-4:]}")
     
     # Join group command
     if message_text == "join":
-        if sender_number not in GROUP_MEMBERS:
-            GROUP_MEMBERS.add(sender_number)
-            response = f"✅ {sender_name} joined the inventory group!\n"
-            response += f"👥 Total members: {len(GROUP_MEMBERS)}\n"
-            response += "Type 'help' for commands."
-            
-            # Notify other members
-            broadcast_message = f"👋 {sender_name} joined the inventory group!"
-            broadcast_to_group(broadcast_message, exclude_number=sender_number)
-            
-            return response
+        if not FirebaseManager.is_group_member(sender_number):
+            if FirebaseManager.add_group_member(sender_number, sender_name):
+                members = FirebaseManager.get_group_members()
+                response = f"✅ {sender_name} joined the inventory group!\n"
+                response += f"👥 Total members: {len(members)}\n"
+                response += "Type 'help' for commands."
+                
+                # Notify other members
+                broadcast_message = f"👋 {sender_name} joined the inventory group!"
+                broadcast_to_group(broadcast_message, exclude_number=sender_number)
+                
+                # Log the action
+                FirebaseManager.add_inventory_update(
+                    sender_number, sender_name, "join", 
+                    description="Joined the group"
+                )
+                
+                return response
+            else:
+                return "❌ Error joining group. Please try again."
         else:
             return "✅ You're already in the group!"
     
     # Leave group command
     elif message_text == "leave":
-        if sender_number in GROUP_MEMBERS:
-            GROUP_MEMBERS.remove(sender_number)
-            broadcast_message = f"👋 {sender_name} left the inventory group"
-            broadcast_to_group(broadcast_message, exclude_number=sender_number)
-            return "✅ You left the inventory group"
+        if FirebaseManager.is_group_member(sender_number):
+            if FirebaseManager.remove_group_member(sender_number):
+                broadcast_message = f"👋 {sender_name} left the inventory group"
+                broadcast_to_group(broadcast_message, exclude_number=sender_number)
+                
+                # Log the action
+                FirebaseManager.add_inventory_update(
+                    sender_number, sender_name, "leave", 
+                    description="Left the group"
+                )
+                
+                return "✅ You left the inventory group"
+            else:
+                return "❌ Error leaving group. Please try again."
         else:
             return "❌ You're not in the group"
     
     # Check if user is in group
-    if sender_number not in GROUP_MEMBERS:
+    if not FirebaseManager.is_group_member(sender_number):
         return "❌ You must join the group first. Send 'join' to participate."
     
     # Group help command
@@ -148,7 +411,7 @@ def process_group_inventory_command(message_text, sender_number):
 
 🔧 *Admin Commands:*
 • reset - Clear all inventory (admin only)
-• kick <number> - Remove member (admin only)
+• remove apple - Remove item completely (admin only)
 
 💡 *Examples:*
 • apple=10, banana=5, orange=8
@@ -158,13 +421,14 @@ def process_group_inventory_command(message_text, sender_number):
     
     # Show group members
     elif message_text == "members":
-        if not GROUP_MEMBERS:
+        members = FirebaseManager.get_group_members()
+        if not members:
             return "👥 No members in the group"
         
-        response = f"👥 *Group Members ({len(GROUP_MEMBERS)}):*\n"
-        for i, member in enumerate(GROUP_MEMBERS, 1):
-            member_name = GROUP_ADMINS.get(member, f"User {member[-4:]}")
-            admin_badge = " 👑" if is_group_admin(member) else ""
+        response = f"👥 *Group Members ({len(members)}):*\n"
+        for i, member in enumerate(members, 1):
+            member_name = member['name']
+            admin_badge = " 👑" if is_group_admin(member['phone_number']) else ""
             response += f"{i}. {member_name}{admin_badge}\n"
         return response
     
@@ -180,6 +444,12 @@ def process_group_inventory_command(message_text, sender_number):
         full_message = f"📢 *Broadcast from {sender_name}:*\n{broadcast_msg}"
         sent_count = broadcast_to_group(full_message, exclude_number=sender_number)
         
+        # Log the action
+        FirebaseManager.add_inventory_update(
+            sender_number, sender_name, "broadcast", 
+            description=f"Broadcast message to {sent_count} members"
+        )
+        
         return f"✅ Message sent to {sent_count} members"
     
     # Reset inventory (admin only)
@@ -187,23 +457,57 @@ def process_group_inventory_command(message_text, sender_number):
         if not is_group_admin(sender_number):
             return "❌ Only admins can reset inventory"
         
-        inventory.clear()
-        inventory_updates.clear()
+        if FirebaseManager.clear_inventory():
+            # Notify group
+            broadcast_message = f"🔄 {sender_name} reset the inventory"
+            broadcast_to_group(broadcast_message, exclude_number=sender_number)
+            
+            # Log the action
+            FirebaseManager.add_inventory_update(
+                sender_number, sender_name, "reset", 
+                description="Reset all inventory"
+            )
+            
+            return "✅ Inventory reset successfully"
+        else:
+            return "❌ Error resetting inventory"
+    
+    # Remove specific item (admin only)
+    elif message_text.startswith("remove "):
+        if not is_group_admin(sender_number):
+            return "❌ Only admins can remove items"
         
-        # Notify group
-        broadcast_message = f"🔄 {sender_name} reset the inventory"
-        broadcast_to_group(broadcast_message, exclude_number=sender_number)
+        item_name = message_text[7:].strip()
+        if not item_name:
+            return "❌ Usage: remove apple"
         
-        return "✅ Inventory reset successfully"
+        if FirebaseManager.get_inventory_item(item_name) > 0:
+            if FirebaseManager.delete_inventory_item(item_name):
+                # Log the action
+                FirebaseManager.add_inventory_update(
+                    sender_number, sender_name, "remove", 
+                    item_name, description=f"Removed {item_name} from inventory"
+                )
+                
+                # Notify group
+                broadcast_message = f"🗑️ {sender_name} removed {item_name} from inventory"
+                broadcast_to_group(broadcast_message, exclude_number=sender_number)
+                
+                return f"✅ Removed {item_name} from inventory"
+            else:
+                return "❌ Error removing item"
+        else:
+            return f"❌ {item_name} not found in inventory"
     
     # Show inventory
     elif message_text == "inventory":
+        inventory = FirebaseManager.get_inventory()
         if not inventory:
             return "📦 Inventory is empty"
         
         response = "📦 *Current Inventory:*\n"
         total_items = 0
-        for item, quantity in inventory.items():
+        for item, quantity in sorted(inventory.items()):
             response += f"• {item}: {quantity}\n"
             total_items += quantity
         
@@ -212,13 +516,30 @@ def process_group_inventory_command(message_text, sender_number):
     
     # Show update history
     elif message_text == "history":
-        if not inventory_updates:
+        updates = FirebaseManager.get_recent_updates(8)
+        if not updates:
             return "📋 No inventory updates yet"
         
         response = "📋 *Recent Updates:*\n"
-        # Show last 5 updates
-        for update in inventory_updates[-5:]:
-            response += f"• {update}\n"
+        for update in updates:
+            time_str = ""
+            if update.get('timestamp'):
+                # Handle Firestore timestamp
+                timestamp = update['timestamp']
+                if hasattr(timestamp, 'timestamp'):
+                    dt = datetime.fromtimestamp(timestamp.timestamp())
+                    time_str = dt.strftime('%H:%M')
+                else:
+                    time_str = "now"
+            
+            response += f"• {update['user_name']} {update['action']}"
+            if update.get('item_name'):
+                response += f" {update['item_name']}"
+            if update.get('quantity'):
+                response += f" ({update['quantity']})"
+            if time_str:
+                response += f" at {time_str}"
+            response += "\n"
         
         return response
     
@@ -231,23 +552,29 @@ def process_group_inventory_command(message_text, sender_number):
                 item = item.strip()
                 quantity = int(quantity.strip())
                 
-                if item in inventory:
-                    inventory[item] += quantity
+                if quantity <= 0:
+                    return "❌ Quantity must be positive"
+                
+                current_quantity = FirebaseManager.get_inventory_item(item)
+                new_quantity = current_quantity + quantity
+                
+                if FirebaseManager.update_inventory(item, new_quantity):
+                    # Log update
+                    FirebaseManager.add_inventory_update(
+                        sender_number, sender_name, "add", 
+                        item, quantity, f"Added {quantity} {item}(s)"
+                    )
+                    
+                    response = f"✅ Added {quantity} {item}(s)\n"
+                    response += f"📦 New quantity: {new_quantity}"
+                    
+                    # Notify group
+                    broadcast_message = f"➕ {sender_name} added {quantity} {item}(s) to inventory"
+                    broadcast_to_group(broadcast_message, exclude_number=sender_number)
+                    
+                    return response
                 else:
-                    inventory[item] = quantity
-                
-                # Log update
-                update_log = f"{sender_name} added {quantity} {item}(s) at {datetime.now().strftime('%H:%M')}"
-                inventory_updates.append(update_log)
-                
-                response = f"✅ Added {quantity} {item}(s)\n"
-                response += f"📦 New quantity: {inventory[item]}"
-                
-                # Notify group
-                broadcast_message = f"➕ {sender_name} added {quantity} {item}(s) to inventory"
-                broadcast_to_group(broadcast_message, exclude_number=sender_number)
-                
-                return response
+                    return "❌ Error updating inventory"
             else:
                 return "❌ Format: add apple=5"
         except ValueError:
@@ -262,22 +589,33 @@ def process_group_inventory_command(message_text, sender_number):
                 item = item.strip()
                 quantity = int(quantity.strip())
                 
-                if item not in inventory:
+                if quantity <= 0:
+                    return "❌ Quantity must be positive"
+                
+                current_quantity = FirebaseManager.get_inventory_item(item)
+                
+                if current_quantity == 0:
                     return f"❌ {item} not found in inventory"
                 
-                if inventory[item] < quantity:
-                    return f"❌ Not enough {item}. Available: {inventory[item]}"
+                if current_quantity < quantity:
+                    return f"❌ Not enough {item}. Available: {current_quantity}"
                 
-                inventory[item] -= quantity
-                if inventory[item] == 0:
-                    del inventory[item]
+                new_quantity = current_quantity - quantity
+                
+                if new_quantity == 0:
+                    # Remove item if quantity becomes 0
+                    FirebaseManager.delete_inventory_item(item)
+                else:
+                    FirebaseManager.update_inventory(item, new_quantity)
                 
                 # Log update
-                update_log = f"{sender_name} sold {quantity} {item}(s) at {datetime.now().strftime('%H:%M')}"
-                inventory_updates.append(update_log)
+                FirebaseManager.add_inventory_update(
+                    sender_number, sender_name, "sell", 
+                    item, quantity, f"Sold {quantity} {item}(s)"
+                )
                 
                 response = f"✅ Sold {quantity} {item}(s)\n"
-                response += f"📦 Remaining: {inventory.get(item, 0)}"
+                response += f"📦 Remaining: {new_quantity}"
                 
                 # Notify group
                 broadcast_message = f"➖ {sender_name} sold {quantity} {item}(s) from inventory"
@@ -300,13 +638,25 @@ def process_group_inventory_command(message_text, sender_number):
                     name, quantity = item.split("=", 1)
                     name = name.strip()
                     quantity = int(quantity.strip())
-                    inventory[name] = quantity
-                    updated_items.append(f"{name}: {quantity}")
+                    
+                    if quantity < 0:
+                        return f"❌ Quantity for {name} must be non-negative"
+                    
+                    if quantity == 0:
+                        # Remove item if quantity is 0
+                        if FirebaseManager.get_inventory_item(name) > 0:
+                            FirebaseManager.delete_inventory_item(name)
+                            updated_items.append(f"{name}: removed")
+                    else:
+                        if FirebaseManager.update_inventory(name, quantity):
+                            updated_items.append(f"{name}: {quantity}")
             
             if updated_items:
                 # Log update
-                update_log = f"{sender_name} updated inventory at {datetime.now().strftime('%H:%M')}"
-                inventory_updates.append(update_log)
+                FirebaseManager.add_inventory_update(
+                    sender_number, sender_name, "update", 
+                    description="Updated inventory items"
+                )
                 
                 response = "✅ Inventory updated:\n"
                 for item in updated_items:
@@ -325,147 +675,135 @@ def process_group_inventory_command(message_text, sender_number):
     else:
         return "❌ Unknown command. Type 'help' for available commands."
 
-# Add root route to handle home page
+# Routes
 @app.route('/')
 def home():
     """Landing page for the inventory bot"""
-    # Use f-string to avoid conflicts with CSS braces
-    group_count = len(GROUP_MEMBERS)
-    inventory_count = len(inventory)
-    updates_count = len(inventory_updates)
-    webhook_url = f"{request.host_url}webhook"
-    
-    return f"""
-    <html>
-    <head>
-        <title>WhatsApp Inventory Bot</title>
-        <style>
-            body {{ font-family: Arial, sans-serif; max-width: 600px; margin: 50px auto; padding: 20px; }}
-            h1 {{ color: #25d366; }}
-            .status {{ background: #e8f5e8; padding: 10px; border-radius: 5px; margin: 20px 0; }}
-            .command {{ background: #f0f0f0; padding: 5px; margin: 5px 0; font-family: monospace; }}
-        </style>
-    </head>
-    <body>
-        <h1>🤖 WhatsApp Inventory Bot</h1>
+    try:
+        if not db:
+            return """
+            <html>
+            <body>
+                <h1>🤖 WhatsApp Inventory Bot</h1>
+                <div style="background: #ffe8e8; padding: 10px; border-radius: 5px; margin: 20px 0; color: #d32f2f;">
+                    <strong>❌ Firebase Error:</strong> Database not initialized
+                </div>
+                <p>Please check your Firebase configuration.</p>
+            </body>
+            </html>
+            """
         
-        <div class="status">
-            <strong>✅ Bot Status:</strong> Online and Ready
-        </div>
+        members = FirebaseManager.get_group_members()
+        inventory = FirebaseManager.get_inventory()
+        updates = FirebaseManager.get_recent_updates(5)
         
-        <h2>📱 How to Use:</h2>
-        <p>Send these commands to your WhatsApp bot:</p>
+        group_count = len(members)
+        inventory_count = len(inventory)
+        updates_count = len(updates)
+        webhook_url = f"{request.host_url}webhook"
         
-        <h3>👥 Group Commands:</h3>
-        <div class="command">join</div>
-        <div class="command">leave</div>
-        <div class="command">members</div>
-        <div class="command">broadcast &lt;message&gt;</div>
-        
-        <h3>📦 Inventory Commands:</h3>
-        <div class="command">inventory</div>
-        <div class="command">add apple=5</div>
-        <div class="command">sell banana=3</div>
-        <div class="command">history</div>
-        <div class="command">apple=10, banana=5</div>
-        
-        <h3>🔧 Admin Commands:</h3>
-        <div class="command">reset</div>
-        <div class="command">help</div>
-        
-        <h2>📊 Current Status:</h2>
-        <p><strong>Group Members:</strong> {group_count}</p>
-        <p><strong>Inventory Items:</strong> {inventory_count}</p>
-        <p><strong>Recent Updates:</strong> {updates_count}</p>
-        
-        <div class="status">
-            <strong>🔗 Webhook URL:</strong> {webhook_url}
-        </div>
-    </body>
-    </html>
-    """
+        return f"""
+        <html>
+        <head>
+            <title>WhatsApp Inventory Bot</title>
+            <style>
+                body {{ font-family: Arial, sans-serif; max-width: 600px; margin: 50px auto; padding: 20px; }}
+                h1 {{ color: #25d366; }}
+                .status {{ background: #e8f5e8; padding: 10px; border-radius: 5px; margin: 20px 0; }}
+                .firebase {{ background: #fff3e0; padding: 10px; border-radius: 5px; margin: 20px 0; color: #f57c00; }}
+                .command {{ background: #f0f0f0; padding: 5px; margin: 5px 0; font-family: monospace; }}
+            </style>
+        </head>
+        <body>
+            <h1>🤖 WhatsApp Inventory Bot</h1>
+            
+            <div class="status">
+                <strong>✅ Bot Status:</strong> Online with Firebase Storage
+            </div>
+            
+            <div class="firebase">
+                <strong>🔥 Firebase:</strong> Connected and Ready
+            </div>
+            
+            <h2>📱 How to Use:</h2>
+            <p>Send these commands to your WhatsApp bot:</p>
+            
+            <h3>👥 Group Commands:</h3>
+            <div class="command">join</div>
+            <div class="command">leave</div>
+            <div class="command">members</div>
+            <div class="command">broadcast &lt;message&gt;</div>
+            
+            <h3>📦 Inventory Commands:</h3>
+            <div class="command">inventory</div>
+            <div class="command">add apple=5</div>
+            <div class="command">sell banana=3</div>
+            <div class="command">history</div>
+            <div class="command">apple=10, banana=5</div>
+            
+            <h3>🔧 Admin Commands:</h3>
+            <div class="command">reset</div>
+            <div class="command">remove apple</div>
+            <div class="command">help</div>
+            
+            <h2>📊 Current Status:</h2>
+            <p><strong>Group Members:</strong> {group_count}</p>
+            <p><strong>Inventory Items:</strong> {inventory_count}</p>
+            <p><strong>Recent Updates:</strong> {updates_count}</p>
+            
+            <div class="status">
+                <strong>🔗 Webhook URL:</strong> {webhook_url}
+            </div>
+        </body>
+        </html>
+        """
+    except Exception as e:
+        return f"""
+        <html>
+        <body>
+            <h1>🤖 WhatsApp Inventory Bot</h1>
+            <div style="background: #ffe8e8; padding: 10px; border-radius: 5px; margin: 20px 0; color: #d32f2f;">
+                <strong>❌ Firebase Error:</strong> {str(e)}
+            </div>
+            <p>Please check your Firebase configuration.</p>
+        </body>
+        </html>
+        """
 
-# Add a debug endpoint to check WhatsApp API credentials
-@app.route('/debug-whatsapp')
-def debug_whatsapp():
-    """Debug endpoint to check WhatsApp API configuration"""
-    access_token = os.getenv('WHATSAPP_ACCESS_TOKEN')
-    phone_number_id = os.getenv('WHATSAPP_PHONE_NUMBER_ID')
-    
+@app.route('/firebase-status')
+def firebase_status():
+    """Check Firebase connection status"""
     return jsonify({
-        "access_token_set": access_token is not None,
-        "access_token_length": len(access_token) if access_token else 0,
-        "access_token_preview": access_token[:10] + "..." if access_token and len(access_token) > 10 else access_token,
-        "phone_number_id_set": phone_number_id is not None,
-        "phone_number_id_length": len(phone_number_id) if phone_number_id else 0,
-        "phone_number_id_preview": phone_number_id[:5] + "..." if phone_number_id and len(phone_number_id) > 5 else phone_number_id,
-        "all_env_vars": {k: "SET" if v else "NOT SET" for k, v in {
-            "WHATSAPP_ACCESS_TOKEN": access_token,
-            "WHATSAPP_PHONE_NUMBER_ID": phone_number_id,
-            "VERIFY_TOKEN": os.getenv('VERIFY_TOKEN')
-        }.items()}
-    })
-
-# Add a test endpoint to check environment variables
-@app.route('/test')
-def test_config():
-    """Test endpoint to check configuration"""
-    verify_token = os.getenv('VERIFY_TOKEN')
-    return jsonify({
-        "verify_token_set": verify_token is not None,
-        "verify_token_length": len(verify_token) if verify_token else 0,
-        "verify_token_preview": verify_token[:5] + "..." if verify_token and len(verify_token) > 5 else verify_token,
-        "environment_vars": list(os.environ.keys())
-    })
-
-# Add a health check endpoint
-@app.route('/health')
-def health_check():
-    """Health check endpoint"""
-    return jsonify({
-        "status": "healthy",
-        "timestamp": datetime.now().isoformat(),
-        "group_members": len(GROUP_MEMBERS),
-        "inventory_items": len(inventory),
-        "recent_updates": len(inventory_updates)
+        "firebase_connected": db is not None,
+        "timestamp": datetime.now().isoformat()
     })
 
 @app.route('/webhook', methods=['GET', 'POST'])
 def webhook():
-    """Enhanced webhook with group features"""
+    """Enhanced webhook with Firebase persistence"""
     
     if request.method == 'GET':
-        # Webhook verification with detailed logging
+        # Webhook verification
         mode = request.args.get('hub.mode')
         token = request.args.get('hub.verify_token')
         challenge = request.args.get('hub.challenge')
         
-        # Debug information
-        print(f"Webhook verification attempt:")
-        print(f"  Mode: {mode}")
-        print(f"  Token received: {token}")
-        print(f"  Expected token: {os.getenv('VERIFY_TOKEN')}")
-        print(f"  Challenge: {challenge}")
-        
-        # Check if VERIFY_TOKEN is set
         verify_token = os.getenv('VERIFY_TOKEN')
         if not verify_token:
-            print("ERROR: VERIFY_TOKEN environment variable not set!")
+            logger.error("VERIFY_TOKEN not configured")
             return "VERIFY_TOKEN not configured", 500
         
         if mode == 'subscribe' and token == verify_token:
-            print("✅ Webhook verification successful!")
+            logger.info("Webhook verification successful")
             return challenge
         else:
-            print("❌ Webhook verification failed!")
-            print(f"  Mode check: {mode == 'subscribe'}")
-            print(f"  Token check: {token == verify_token}")
+            logger.error("Webhook verification failed")
             return "Verification failed", 403
     
     elif request.method == 'POST':
         try:
             data = request.get_json()
-            print(f"📨 Received webhook data: {json.dumps(data, indent=2)}")
+            logger.info(f"Received webhook data: {json.dumps(data, indent=2)}")
             
             if 'entry' in data:
                 for entry in data['entry']:
@@ -476,25 +814,30 @@ def webhook():
                                     sender_number = message['from']
                                     message_text = message.get('text', {}).get('body', '')
                                     
-                                    print(f"📱 Processing message from {sender_number}: '{message_text}'")
+                                    logger.info(f"Processing message from {sender_number}: '{message_text}'")
                                     
-                                    # Process with group features
+                                    # Process with Firebase persistence
                                     response = process_group_inventory_command(message_text, sender_number)
-                                    print(f"🤖 Bot response: {response}")
+                                    logger.info(f"Bot response: {response}")
                                     
                                     # Send response
                                     if send_whatsapp_message(sender_number, response):
-                                        print(f"✅ Response sent successfully")
+                                        logger.info("Response sent successfully")
                                     else:
-                                        print(f"❌ Failed to send response")
+                                        logger.error("Failed to send response")
             
             return "OK", 200
             
         except Exception as e:
-            print(f"❌ Webhook error: {str(e)}")
-            print(f"📄 Request data: {request.get_data()}")
+            logger.error(f"Webhook error: {str(e)}")
             return f"Error: {str(e)}", 500
 
 if __name__ == '__main__':
+    # Initialize Firebase
+    if init_firebase():
+        logger.info("Starting Flask app with Firebase support")
+    else:
+        logger.error("Failed to initialize Firebase - app may not work properly")
+    
     port = int(os.getenv('PORT', 5000))
     app.run(host='0.0.0.0', port=port, debug=True)
